@@ -2,6 +2,9 @@
 #
 .DS_Store
 
+# Local Gradle cache used by Codex verification
+.gradle-user-home/
+
 # Xcode
 #
 build/

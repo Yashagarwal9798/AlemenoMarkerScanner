@@ -1,97 +1,182 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# Alemeno Marker Scanner
 
-# Getting Started
+React Native Android app for the Alemeno frontend internship assignment: detect a custom visual marker from the live camera, extract it, correct orientation, and display 20 processed `300×300` marker crops.
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
-
-## Step 1: Start Metro
-
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
-
-To start the Metro dev server, run the following command from the root of your React Native project:
+## Quick Start
 
 ```sh
-# Using npm
+# 1. Clone and enter the app directory
+cd AlemenoMarkerScanner
+
+# 2. Install dependencies
+npm install
+
+# 3. Start Metro bundler
 npm start
 
-# OR using Yarn
-yarn start
-```
-
-## Step 2: Build and run your app
-
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
-
-### Android
-
-```sh
-# Using npm
+# 4. Build and run on Android (separate terminal)
 npm run android
-
-# OR using Yarn
-yarn android
 ```
 
-### iOS
+## Prerequisites
 
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
+| Tool | Version | Notes |
+|------|---------|-------|
+| Node.js | ≥ 22.11.0 | `node -v` to check |
+| npm | ≥ 10 | Bundled with Node |
+| Java JDK | 17 or 21 | `java -version` |
+| Android Studio | Latest | With SDK 34+ and build-tools |
+| Android device/emulator | API 28+ | Camera requires a physical device for real scanning |
 
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
+### Environment Variables
 
 ```sh
-bundle install
+# Set ANDROID_HOME to your SDK path
+export ANDROID_HOME=$HOME/Library/Android/sdk   # macOS
+export ANDROID_HOME=$HOME/Android/Sdk           # Linux
+set ANDROID_HOME=C:\Users\<you>\AppData\Local\Android\Sdk  # Windows
+
+# Add platform-tools to PATH
+export PATH=$PATH:$ANDROID_HOME/platform-tools
 ```
 
-Then, and every time you update your native dependencies, run:
+### Windows-Specific Notes
+
+- Use `npm.cmd` instead of `npm` if PowerShell blocks `npm.ps1`.
+- Use `npx.cmd` instead of `npx` for the same reason.
+
+## Install
 
 ```sh
-bundle exec pod install
+npm install
 ```
 
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
+The `postinstall` script patches the React Native Gradle plugin's Foojay resolver from `0.5.0` to `1.0.0`. This is required because Gradle 9.3.1 removed a vendor constant that Foojay `0.5.0` depends on.
+
+### Key Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `react-native` 0.85.3 | App framework |
+| `react-native-vision-camera` | Camera preview and frame access |
+| `react-native-safe-area-context` | Safe area insets |
+| OpenCV 4.9.0 (Maven) | Native image processing |
+
+## Run
+
+### Development
 
 ```sh
-# Using npm
-npm run ios
+# Terminal 1: Metro bundler
+npm start
 
-# OR using Yarn
-yarn ios
+# Terminal 2: Build and run
+npm run android
 ```
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+### Build Release APK
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+```sh
+cd android
+./gradlew assembleRelease
+```
 
-## Step 3: Modify your app
+The APK will be at: `android/app/build/outputs/apk/release/app-release.apk`
 
-Now that you have successfully run the app, let's make changes!
+> **Note**: You may need to configure signing in `android/app/build.gradle` for a signed release build. For evaluation, an unsigned debug APK also works:
+> ```sh
+> cd android
+> ./gradlew assembleDebug
+> ```
+> Debug APK: `android/app/build/outputs/apk/debug/app-debug.apk`
 
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
+## Verification
 
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
+```sh
+# TypeScript type-check
+npx tsc --noEmit
 
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
+# Jest tests (42 tests, 5 suites)
+npm test
 
-## Congratulations! :tada:
+# ESLint
+npm run lint
 
-You've successfully run and modified your React Native App. :partying_face:
+# Android instrumented tests (requires device/emulator)
+cd android && ./gradlew :app:connectedAndroidTest
+```
 
-### Now what?
+## Project Structure
 
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
+```text
+AlemenoMarkerScanner/
+  App.tsx                 App entry — routes between scanner and results
+  src/
+    components/
+      MarkerGrid.tsx      4×5 grid of 300×300 marker images
+      MarkerOverlay.tsx   Draws detected corners on camera preview
+    hooks/
+      useMarkerScanner.ts Capture state (reducer, 20-cap, dedup)
+      useDetectionLoop.ts Polling detector with busy guard
+    native/
+      markerDetector.ts   JS→native bridge with timeout guard
+      markerTestCases.ts  7 static test image definitions
+    screens/
+      CameraScannerScreen.tsx  Camera + detection + overlay + capture
+      ResultsScreen.tsx        20-marker grid + scan again
+    store/
+      markerCaptureStore.ts    Reducer with frameId dedup
+    types/
+      marker.ts               MarkerCapture, MarkerDetectionResult, Point
 
-# Troubleshooting
+  android/app/src/main/java/com/alemenomarkerscanner/marker/
+    NativeMarkerDetectorModule.kt   React Native bridge module
+    MarkerDetectorConfig.kt         All tunable thresholds
+    ImagePreprocessor.kt            Grayscale → resize → blur → Otsu → morph
+    CandidateDetector.kt            Contour → polygon approx → quad filter
+    SquareCandidate.kt              Data class (corners, area, aspect)
+    PerspectiveWarper.kt            Warp to 300×300 + 4-rotation variants
+    Marker1Validator.kt             Border + inner cell + guard + confidence
+    OrientationCorrector.kt         Rotate so cell is top-left + verify
 
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
+  android/app/src/androidTest/      Instrumented tests
+  __tests__/                        Jest unit and integration tests
+```
 
-# Learn More
+## Detection Pipeline
 
-To learn more about React Native, take a look at the following resources:
+See [`docs/approach.md`](../docs/approach.md) for a detailed explanation.
 
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+```text
+Camera Frame
+  → ImagePreprocessor      Gray → resize → blur → Otsu → invert → morph
+  → CandidateDetector      Contours → polygon approx → 4-vertex quads
+  → PerspectiveWarper      4 rotations × 300×300 grayscale
+  → Marker1Validator       Border check + inner cell + interior guard
+  → OrientationCorrector   Rotate cell to top-left + re-validate
+  → Result                 found=true/false + confidence + corners
+```
+
+## Test Images
+
+The `Alemeno Frontend Assignment Marker Images/` directory (one level up) contains:
+
+| Image | Expected |
+|-------|----------|
+| Marker1-TestImage1-Correct.jpg | Accept ✓ |
+| Marker1-TestImage2-Correct.jpg | Accept ✓ |
+| Marker1-TestImage3-Correct.jpg | Accept ✓ |
+| Marker1-TestImage4-Incorrect.jpg | Reject ✗ |
+| Marker1-TestImage5-Incorrect.jpg | Reject ✗ |
+| Marker1-TestImage6-Incorrect.jpg | Reject ✗ |
+| Marker1-TestImage7-Incorrect.jpg | Reject ✗ |
+
+## Documentation
+
+| File | Contents |
+|------|----------|
+| [`docs/PRD.md`](../docs/PRD.md) | Product requirements |
+| [`docs/HLD.md`](../docs/HLD.md) | High-level architecture |
+| [`docs/LLD.md`](../docs/LLD.md) | Low-level design (algorithms) |
+| [`docs/approach.md`](../docs/approach.md) | Approach document (for submission) |
+| `part-00.md` … `part-12.md` | Per-part implementation checkpoints |
