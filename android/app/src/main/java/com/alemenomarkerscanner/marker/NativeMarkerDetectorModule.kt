@@ -1,5 +1,6 @@
 package com.alemenomarkerscanner.marker
 
+import android.media.ExifInterface
 import android.os.SystemClock
 import android.util.Log
 import com.facebook.react.bridge.Arguments
@@ -10,7 +11,10 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
+import java.io.File
 import org.opencv.android.OpenCVLoader
+import org.opencv.core.Core
+import org.opencv.core.Mat
 import org.opencv.imgcodecs.Imgcodecs
 
 class NativeMarkerDetectorModule(
@@ -58,10 +62,16 @@ class NativeMarkerDetectorModule(
       frameId: Int,
       startedAtNanos: Long,
   ): WritableMap {
-    val image = Imgcodecs.imread(imagePath)
-    if (image.empty()) {
+    val readableImagePath = normalizeImagePath(imagePath)
+    val rawImage = Imgcodecs.imread(readableImagePath)
+    if (rawImage.empty()) {
       Log.w(TAG, "Could not load image: $imagePath")
       return createNoDetectionResult(frameId, startedAtNanos, "Failed to load image")
+    }
+
+    val image = normalizeImageOrientation(rawImage, readableImagePath)
+    if (image !== rawImage) {
+      rawImage.release()
     }
 
     try {
@@ -138,21 +148,16 @@ class NativeMarkerDetectorModule(
             }
 
             // Build the positive result — minimal data across bridge
-            val cornersArray = Arguments.createArray()
-            for (pt in candidate.corners) {
-              val point = Arguments.createMap()
-              point.putDouble("x", pt.x * preprocessResult.scaleFactor)
-              point.putDouble("y", pt.y * preprocessResult.scaleFactor)
-              cornersArray.pushMap(point)
-            }
-
             val result = Arguments.createMap()
             result.putBoolean("found", true)
+            result.putBoolean("candidateFound", true)
             result.putInt("frameId", frameId)
             result.putDouble("confidence", validation.confidence)
-            result.putArray("corners", cornersArray)
+            result.putArray("corners", createCornersArray(candidate, preprocessResult.scaleFactor))
             result.putInt("rotationDegrees", totalRotation)
-            result.putNull("imageUri") // Will be set when saving
+            result.putString("imageUri", saveDetectedMarkerImage(correction.corrected, frameId))
+            result.putInt("imageWidth", image.cols())
+            result.putInt("imageHeight", image.rows())
             result.putDouble("processingTimeMs", totalMs)
 
             // Release all Mats
@@ -176,6 +181,27 @@ class NativeMarkerDetectorModule(
           "pre=${"%.0f".format(preDurationMs)}ms | " +
           "cand=${"%.0f".format(candDurationMs)}ms | " +
           "total=${"%.0f".format(totalMs)}ms")
+
+      if (candidates.isNotEmpty()) {
+        val bestCandidate = candidates.first()
+        val result = Arguments.createMap()
+        result.putBoolean("found", false)
+        result.putBoolean("candidateFound", true)
+        result.putInt("frameId", frameId)
+        result.putDouble("confidence", 0.0)
+        result.putArray("corners", createCornersArray(bestCandidate, preprocessResult.scaleFactor))
+        result.putInt("rotationDegrees", 0)
+        result.putNull("imageUri")
+        result.putInt("imageWidth", image.cols())
+        result.putInt("imageHeight", image.rows())
+        result.putDouble("processingTimeMs", totalMs)
+
+        preprocessResult.binary.release()
+        preprocessResult.gray.release()
+        image.release()
+
+        return result
+      }
 
       // Release OpenCV Mats
       preprocessResult.binary.release()
@@ -224,6 +250,53 @@ class NativeMarkerDetectorModule(
     return request.getString("imageUri")
   }
 
+  private fun normalizeImagePath(imageUri: String): String =
+      if (imageUri.startsWith("file://")) {
+        imageUri.removePrefix("file://")
+      } else {
+        imageUri
+      }
+
+  private fun normalizeImageOrientation(image: Mat, imagePath: String): Mat {
+    val orientation = try {
+      ExifInterface(imagePath).getAttributeInt(
+          ExifInterface.TAG_ORIENTATION,
+          ExifInterface.ORIENTATION_NORMAL,
+      )
+    } catch (throwable: Throwable) {
+      ExifInterface.ORIENTATION_NORMAL
+    }
+
+    val rotationCode = when (orientation) {
+      ExifInterface.ORIENTATION_ROTATE_90 -> Core.ROTATE_90_CLOCKWISE
+      ExifInterface.ORIENTATION_ROTATE_180 -> Core.ROTATE_180
+      ExifInterface.ORIENTATION_ROTATE_270 -> Core.ROTATE_90_COUNTERCLOCKWISE
+      else -> return image
+    }
+
+    val rotated = Mat()
+    Core.rotate(image, rotated, rotationCode)
+    return rotated
+  }
+
+  private fun saveDetectedMarkerImage(markerImage: org.opencv.core.Mat, frameId: Int): String {
+    val captureDir = File(reactApplicationContext.cacheDir, "marker_captures")
+    if (!captureDir.exists() && !captureDir.mkdirs()) {
+      throw RuntimeException("Could not create marker capture directory")
+    }
+
+    val outputFile = File(
+        captureDir,
+        "marker_${frameId}_${SystemClock.elapsedRealtimeNanos()}.jpg",
+    )
+
+    if (!Imgcodecs.imwrite(outputFile.absolutePath, markerImage)) {
+      throw RuntimeException("Could not save detected marker image")
+    }
+
+    return "file://${outputFile.absolutePath}"
+  }
+
   private fun createNoDetectionResult(
       frameId: Int,
       startedAtNanos: Long,
@@ -233,6 +306,7 @@ class NativeMarkerDetectorModule(
     val result = Arguments.createMap()
 
     result.putBoolean("found", false)
+    result.putBoolean("candidateFound", false)
     result.putInt("frameId", frameId)
     result.putDouble("confidence", 0.0)
     result.putArray("corners", createEmptyCorners())
@@ -245,6 +319,22 @@ class NativeMarkerDetectorModule(
     }
 
     return result
+  }
+
+  private fun createCornersArray(
+      candidate: SquareCandidate,
+      scaleFactor: Double,
+  ): WritableArray {
+    val cornersArray = Arguments.createArray()
+
+    for (pt in candidate.corners) {
+      val point = Arguments.createMap()
+      point.putDouble("x", pt.x * scaleFactor)
+      point.putDouble("y", pt.y * scaleFactor)
+      cornersArray.pushMap(point)
+    }
+
+    return cornersArray
   }
 
   private fun createEmptyCorners(): WritableArray {

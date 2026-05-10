@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Linking,
   Pressable,
@@ -8,10 +8,17 @@ import {
   type GestureResponderEvent,
   type LayoutChangeEvent,
 } from 'react-native';
-import { Camera, useCameraPermission } from 'react-native-vision-camera';
+import {
+  Camera,
+  useCameraDevice,
+  useCameraPermission,
+  usePhotoOutput,
+  type CameraRef,
+  type PhotoFile,
+} from 'react-native-vision-camera';
 
 import { MarkerOverlay } from '../components';
-import { useDetectionLoop } from '../hooks';
+import { useDetectionLoop, type CapturePhotoFn } from '../hooks';
 import type { MarkerCapture, MarkerDetectionResult } from '../types';
 
 type CameraScannerScreenProps = {
@@ -31,11 +38,14 @@ export function CameraScannerScreen({
 }: CameraScannerScreenProps) {
   const { status, hasPermission, canRequestPermission, requestPermission } =
     useCameraPermission();
+  const device = useCameraDevice('back');
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isPreviewReady, setIsPreviewReady] = useState(false);
   const [lastDetection, setLastDetection] = useState<MarkerDetectionResult | null>(null);
   const [previewLayout, setPreviewLayout] = useState({ width: 0, height: 0 });
   const seenFrameIds = useRef(new Set<number>());
+  const cameraRef = useRef<CameraRef>(null);
+  const photoOutput = usePhotoOutput({ qualityPrioritization: 'speed' });
 
   useEffect(() => {
     if (status === 'not-determined') {
@@ -71,11 +81,27 @@ export function CameraScannerScreen({
     [addCapture],
   );
 
+  // Capture a photo from the camera for each detection cycle
+  const capturePhoto: CapturePhotoFn = useCallback(async () => {
+    if (!cameraRef.current) {
+      return undefined;
+    }
+    try {
+      const photo: PhotoFile = await photoOutput.capturePhotoToFile(
+        { enableShutterSound: false },
+        {},
+      );
+      return photo.filePath;
+    } catch {
+      return undefined;
+    }
+  }, [photoOutput]);
+
   // Detection loop with busy guard
   useDetectionLoop(
     hasPermission && isPreviewReady,
     isComplete,
-    undefined, // imageUri comes from native module (camera capture)
+    capturePhoto,
     handleDetectionResult,
   );
 
@@ -113,6 +139,8 @@ export function CameraScannerScreen({
     ? cameraError
     : lastDetection?.found
       ? `Marker detected! (${lastDetection.processingTimeMs.toFixed(0)}ms)`
+      : lastDetection?.candidateFound
+        ? 'Square found - checking marker...'
       : isPreviewReady
         ? 'Scanning for markers...'
         : 'Starting camera...';
@@ -130,25 +158,34 @@ export function CameraScannerScreen({
       </View>
 
       <View style={styles.preview} onLayout={handlePreviewLayout}>
-        {hasPermission ? (
+        {hasPermission && device ? (
           <>
             <Camera
+              ref={cameraRef}
               style={StyleSheet.absoluteFill}
-              device="back"
+              device={device}
               isActive={!isComplete}
+              outputs={[photoOutput]}
               resizeMode="cover"
               onError={handleCameraError}
               onPreviewStarted={handlePreviewStarted}
               onPreviewStopped={handlePreviewStopped}
             />
             <ScannerFrame />
-            {lastDetection?.found && previewLayout.width > 0 && (
+            {(lastDetection?.found || lastDetection?.candidateFound) &&
+              previewLayout.width > 0 && (
               <MarkerOverlay
                 corners={lastDetection.corners}
                 previewWidth={previewLayout.width}
                 previewHeight={previewLayout.height}
-                imageWidth={previewLayout.width}
-                imageHeight={previewLayout.height}
+                imageWidth={lastDetection.imageWidth ?? previewLayout.width}
+                imageHeight={lastDetection.imageHeight ?? previewLayout.height}
+                targetRect={{
+                  left: SCANNER_FRAME_HORIZONTAL_INSET,
+                  top: SCANNER_FRAME_VERTICAL_INSET,
+                  right: previewLayout.width - SCANNER_FRAME_HORIZONTAL_INSET,
+                  bottom: previewLayout.height - SCANNER_FRAME_VERTICAL_INSET,
+                }}
               />
             )}
             <View style={styles.previewStatus}>
@@ -263,6 +300,9 @@ const cornerBase = {
   borderColor: '#f5f5f0',
 };
 
+const SCANNER_FRAME_HORIZONTAL_INSET = 24;
+const SCANNER_FRAME_VERTICAL_INSET = 36;
+
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
@@ -361,11 +401,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   scannerFrame: {
-    bottom: 36,
-    left: 24,
+    bottom: SCANNER_FRAME_VERTICAL_INSET,
+    left: SCANNER_FRAME_HORIZONTAL_INSET,
     position: 'absolute',
-    right: 24,
-    top: 36,
+    right: SCANNER_FRAME_HORIZONTAL_INSET,
+    top: SCANNER_FRAME_VERTICAL_INSET,
   },
   cornerTopLeft: {
     ...cornerBase,

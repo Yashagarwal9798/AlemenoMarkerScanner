@@ -66,6 +66,7 @@ function normalizeDetectionResult(
 
   return {
     found: result.found === true,
+    candidateFound: result.candidateFound === true || result.found === true,
     frameId: Number.isFinite(result.frameId)
       ? Number(result.frameId)
       : fallbackFrameId,
@@ -75,6 +76,12 @@ function normalizeDetectionResult(
     corners: normalizeCorners(result.corners),
     rotationDegrees: normalizeRotation(result.rotationDegrees),
     imageUri: typeof result.imageUri === 'string' ? result.imageUri : undefined,
+    imageWidth: Number.isFinite(result.imageWidth)
+      ? Number(result.imageWidth)
+      : undefined,
+    imageHeight: Number.isFinite(result.imageHeight)
+      ? Number(result.imageHeight)
+      : undefined,
     processingTimeMs: Number.isFinite(result.processingTimeMs)
       ? Number(result.processingTimeMs)
       : elapsedMs(startedAt),
@@ -87,11 +94,14 @@ function createNoDetectionResult(
 ): MarkerDetectionResult {
   return {
     found: false,
+    candidateFound: false,
     frameId,
     confidence: 0,
     corners: EMPTY_CORNERS,
     rotationDegrees: 0,
     imageUri: undefined,
+    imageWidth: undefined,
+    imageHeight: undefined,
     processingTimeMs: elapsedMs(startedAt),
   };
 }

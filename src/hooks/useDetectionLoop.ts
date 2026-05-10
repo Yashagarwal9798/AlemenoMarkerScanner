@@ -7,8 +7,15 @@ import type { MarkerDetectionResult } from '../types';
 const TARGET_PROCESSING_TIME_MS = 3000;
 
 /**
- * Continuously calls the native marker detector with a busy guard
- * to prevent overlapping calls.
+ * A function that captures a photo from the camera and returns the file path.
+ * Returns undefined if capture is not possible (e.g., camera not ready).
+ */
+export type CapturePhotoFn = () => Promise<string | undefined>;
+
+/**
+ * Continuously captures photos from the camera and runs the native marker
+ * detector on each captured frame with a busy guard to prevent overlapping
+ * calls.
  *
  * From LLD §11:
  * - Skips frames while the previous detection is still running.
@@ -24,7 +31,7 @@ const TARGET_PROCESSING_TIME_MS = 3000;
 export function useDetectionLoop(
   isActive: boolean,
   isComplete: boolean,
-  imageUri: string | undefined,
+  capturePhoto: CapturePhotoFn | undefined,
   onResult: (result: MarkerDetectionResult) => void,
   intervalMs = 500,
 ) {
@@ -32,11 +39,16 @@ export function useDetectionLoop(
   const frameIdRef = useRef(0);
   const droppedFramesRef = useRef(0);
   const onResultRef = useRef(onResult);
+  const capturePhotoRef = useRef(capturePhoto);
 
-  // Keep the callback ref up-to-date without re-triggering the effect
+  // Keep the callback refs up-to-date without re-triggering the effect
   useEffect(() => {
     onResultRef.current = onResult;
   }, [onResult]);
+
+  useEffect(() => {
+    capturePhotoRef.current = capturePhoto;
+  }, [capturePhoto]);
 
   const runDetection = useCallback(async () => {
     if (busyRef.current) {
@@ -49,6 +61,9 @@ export function useDetectionLoop(
     const jsStart = Date.now();
 
     try {
+      // Capture a photo from the camera
+      const imageUri = await capturePhotoRef.current?.();
+
       const result = await detectMarker({
         frameId: currentFrameId,
         imageUri,
@@ -73,7 +88,7 @@ export function useDetectionLoop(
     } finally {
       busyRef.current = false;
     }
-  }, [imageUri]);
+  }, []);
 
   useEffect(() => {
     if (!isActive || isComplete) {

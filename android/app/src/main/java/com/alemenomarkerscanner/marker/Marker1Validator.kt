@@ -3,7 +3,9 @@ package com.alemenomarkerscanner.marker
 import android.util.Log
 import org.opencv.core.Core
 import org.opencv.core.Mat
+import org.opencv.core.MatOfPoint
 import org.opencv.core.Rect
+import org.opencv.core.Scalar
 import org.opencv.imgproc.Imgproc
 
 /**
@@ -33,7 +35,10 @@ object Marker1Validator {
 
     // Expected inner cell size ≈ 43 px (300 * 20/140)
     private const val EXPECTED_CELL_SIZE = 43.0
-    private const val CELL_SIZE_TOLERANCE = 20.0
+    private const val MIN_CELL_SIZE = 30.0
+    private const val MAX_CELL_SIZE = 58.0
+    private const val MIN_CELL_AREA = 900.0
+    private const val MAX_CELL_AREA = 3400.0
 
     // Interior guard (LLD §9.3): center region
     private const val CENTER_START = 100
@@ -115,17 +120,6 @@ object Marker1Validator {
         val cell = validCells[0]
 
         // --- Step 3: Interior guard (LLD §9.3) ---
-        val centerBlack = measureBlackOccupancy(binary,
-            Rect(CENTER_START, CENTER_START,
-                CENTER_END - CENTER_START, CENTER_END - CENTER_START))
-        if (centerBlack > 0.5) {
-            binary.release()
-            return reject(
-                "Center area has too much black: ${"%.2f".format(centerBlack)}",
-                avgBorderScore, cell.score,
-            )
-        }
-
         binary.release()
 
         // --- Step 4: Confidence score (LLD §9.4) ---
@@ -133,8 +127,8 @@ object Marker1Validator {
         val cellNorm = cell.score.coerceIn(0.0, 1.0)
         val extractionScore = 1.0 // Placeholder — refine later with warp quality metrics
 
-        val confidence = 0.25 * geometryScore +
-            0.25 * borderNorm +
+        val confidence = 0.20 * geometryScore +
+            0.30 * borderNorm +
             0.35 * cellNorm +
             0.15 * extractionScore
 
@@ -223,47 +217,83 @@ object Marker1Validator {
      * Analyze a single corner ROI for a square-ish black component.
      */
     private fun analyzeCornerROI(binary: Mat, roi: Rect, corner: Int): CellResult {
-        val subMat = binary.submat(roi)
         val blackOccupancy = measureBlackOccupancy(binary, roi)
 
-        // The orientation cell should have significant black content
-        if (blackOccupancy < MarkerDetectorConfig.MIN_INNER_CELL_BLACK_RATIO) {
+        if (blackOccupancy < 0.12) {
             return CellResult(corner, false, 0.0)
         }
 
-        if (blackOccupancy > MarkerDetectorConfig.MAX_INNER_CELL_BLACK_RATIO) {
-            return CellResult(corner, false, 0.0)
-        }
+        val component = findBestBlackComponent(binary, roi) ?: return CellResult(corner, false, 0.0)
+        val width = component.width.toDouble()
+        val height = component.height.toDouble()
+        val area = component.area
+        val aspect = width / height
+        val size = (width + height) / 2.0
+        val fill = area / (width * height)
 
-        // Check that the black region is square-ish by measuring occupancy balance
-        // Split the ROI into quadrants and check they're roughly balanced
-        val roiW = roi.width
-        val roiH = roi.height
-        val halfW = roiW / 2
-        val halfH = roiH / 2
+        val sizeOk = width in MIN_CELL_SIZE..MAX_CELL_SIZE &&
+            height in MIN_CELL_SIZE..MAX_CELL_SIZE &&
+            area in MIN_CELL_AREA..MAX_CELL_AREA
+        val squareOk = aspect in 0.75..1.33
+        val fillOk = fill >= 0.65
 
-        val q1 = measureBlackOccupancy(binary, Rect(roi.x, roi.y, halfW, halfH))
-        val q2 = measureBlackOccupancy(binary, Rect(roi.x + halfW, roi.y, roiW - halfW, halfH))
-        val q3 = measureBlackOccupancy(binary, Rect(roi.x, roi.y + halfH, halfW, roiH - halfH))
-        val q4 = measureBlackOccupancy(binary, Rect(roi.x + halfW, roi.y + halfH, roiW - halfW, roiH - halfH))
+        val sizeScore = (1.0 - Math.abs(size - EXPECTED_CELL_SIZE) / 18.0)
+            .coerceIn(0.0, 1.0)
+        val aspectScore = (1.0 - Math.abs(aspect - 1.0) / 0.35)
+            .coerceIn(0.0, 1.0)
+        val fillScore = ((fill - 0.65) / 0.35).coerceIn(0.0, 1.0)
+        val score = (sizeScore * 0.55 + aspectScore * 0.25 + fillScore * 0.20)
+            .coerceIn(0.0, 1.0)
 
-        val quadrants = listOf(q1, q2, q3, q4)
-        val quadMin = quadrants.min()
-        val quadMax = quadrants.max()
-
-        // A square-ish cell should have balanced quadrants
-        val balance = if (quadMax > 0) quadMin / quadMax else 0.0
-
-        // Score: combine occupancy quality and balance
-        val occupancyScore = 1.0 - Math.abs(blackOccupancy - 0.75) / 0.25
-        val score = (occupancyScore * 0.6 + balance * 0.4).coerceIn(0.0, 1.0)
-
-        val found = balance > 0.3 // Reasonably balanced across quadrants
+        val found = sizeOk && squareOk && fillOk && score >= 0.55
 
         Log.d(TAG, "Corner $corner: occupancy=${"%.2f".format(blackOccupancy)} " +
-            "balance=${"%.2f".format(balance)} score=${"%.2f".format(score)} found=$found")
+            "size=${"%.1f".format(width)}x${"%.1f".format(height)} " +
+            "area=${"%.0f".format(area)} fill=${"%.2f".format(fill)} " +
+            "score=${"%.2f".format(score)} found=$found")
 
         return CellResult(corner, found, score)
+    }
+
+    private data class Component(
+        val width: Int,
+        val height: Int,
+        val area: Double,
+    )
+
+    private fun findBestBlackComponent(binary: Mat, roi: Rect): Component? {
+        val subMat = binary.submat(roi)
+        val blackMask = Mat()
+        Core.inRange(subMat, Scalar(0.0), Scalar(80.0), blackMask)
+
+        val contours = mutableListOf<MatOfPoint>()
+        val hierarchy = Mat()
+        Imgproc.findContours(
+            blackMask,
+            contours,
+            hierarchy,
+            Imgproc.RETR_EXTERNAL,
+            Imgproc.CHAIN_APPROX_SIMPLE,
+        )
+
+        var best: Component? = null
+        var bestArea = 0.0
+
+        for (contour in contours) {
+            val area = Imgproc.contourArea(contour)
+            if (area > bestArea) {
+                val rect = Imgproc.boundingRect(contour)
+                best = Component(rect.width, rect.height, area)
+                bestArea = area
+            }
+            contour.release()
+        }
+
+        hierarchy.release()
+        blackMask.release()
+        subMat.release()
+
+        return best
     }
 
     // -----------------------------------------------------------------------

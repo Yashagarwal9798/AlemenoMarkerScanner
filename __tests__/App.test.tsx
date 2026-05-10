@@ -17,6 +17,9 @@ jest.mock('react-native-vision-camera', () => {
       canRequestPermission: false,
       requestPermission: jest.fn().mockResolvedValue(true),
     }),
+    usePhotoOutput: () => ({
+      capturePhotoToFile: jest.fn().mockResolvedValue({ filePath: '/tmp/test.jpg' }),
+    }),
   };
 });
 

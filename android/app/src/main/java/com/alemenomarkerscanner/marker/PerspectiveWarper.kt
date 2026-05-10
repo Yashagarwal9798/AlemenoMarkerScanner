@@ -1,5 +1,6 @@
 package com.alemenomarkerscanner.marker
 
+import org.opencv.core.Core
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.Point
@@ -86,14 +87,12 @@ object PerspectiveWarper {
         scaleFactor: Double,
     ): List<Mat> {
         val results = mutableListOf<Mat>()
+        val base = warp(gray, candidate, scaleFactor) ?: return results
 
-        for (rotation in 0 until 4) {
-            val rotatedCandidate = rotateCandidate(candidate, rotation)
-            val warped = warp(gray, rotatedCandidate, scaleFactor)
-            if (warped != null) {
-                results.add(warped)
-            }
-        }
+        results.add(base)
+        results.add(rotateMat(base, Core.ROTATE_90_CLOCKWISE))
+        results.add(rotateMat(base, Core.ROTATE_180))
+        results.add(rotateMat(base, Core.ROTATE_90_COUNTERCLOCKWISE))
 
         return results
     }
@@ -102,11 +101,10 @@ object PerspectiveWarper {
      * Cyclically rotate the corners of a candidate by [steps] positions.
      * rotation=0 → original, rotation=1 → 90° CW, etc.
      */
-    private fun rotateCandidate(candidate: SquareCandidate, steps: Int): SquareCandidate {
-        if (steps == 0) return candidate
-        val n = candidate.corners.size
-        val rotated = List(n) { candidate.corners[(it + steps) % n] }
-        return candidate.copy(corners = rotated)
+    private fun rotateMat(src: Mat, rotationCode: Int): Mat {
+        val dst = Mat()
+        Core.rotate(src, dst, rotationCode)
+        return dst
     }
 
     /**

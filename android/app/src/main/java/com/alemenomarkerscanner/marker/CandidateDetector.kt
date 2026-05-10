@@ -161,17 +161,11 @@ object CandidateDetector {
      * 3. Rotate so top-left is first.
      */
     fun orderCornersClockwise(pts: Array<Point>): List<Point> {
-        val cx = pts.map { it.x }.average()
-        val cy = pts.map { it.y }.average()
+        val topLeft = pts.minByOrNull { it.x + it.y } ?: pts[0]
+        val bottomRight = pts.maxByOrNull { it.x + it.y } ?: pts[0]
+        val topRight = pts.maxByOrNull { it.x - it.y } ?: pts[0]
+        val bottomLeft = pts.minByOrNull { it.x - it.y } ?: pts[0]
 
-        // Sort by angle around centroid (atan2 gives counter-clockwise,
-        // so we negate to get clockwise)
-        val sorted = pts.sortedBy { -Math.atan2(it.y - cy, it.x - cx) }
-
-        // Find the top-left point: smallest sum of (x + y)
-        val topLeftIdx = sorted.indices.minByOrNull { sorted[it].x + sorted[it].y } ?: 0
-
-        // Rotate so top-left is first
-        return List(4) { sorted[(topLeftIdx + it) % 4] }
+        return listOf(topLeft, topRight, bottomRight, bottomLeft)
     }
 }

@@ -38,7 +38,7 @@ object MarkerDetectorConfig {
     // --- Validation thresholds (Part 8) ---
 
     /** Minimum black pixel ratio in border strips. */
-    const val MIN_BORDER_BLACK_RATIO = 0.65
+    const val MIN_BORDER_BLACK_RATIO = 0.55
 
     /** Minimum black pixel ratio in inner orientation cell. */
     const val MIN_INNER_CELL_BLACK_RATIO = 0.55
